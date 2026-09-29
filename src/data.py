@@ -2,8 +2,9 @@
 # 흉부 X-ray(폐렴 분류) 데이터셋의 경로 처리, 재현 가능한 층화(stratified) 분할,
 # 그리고 train/val/test DataLoader 생성을 담당하는 모듈.
 from pathlib import Path
+import re
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
 import torch
 from torch.utils.data import ConcatDataset, DataLoader, Subset
 from torchvision import datasets
@@ -49,6 +50,20 @@ def make_transforms(augment=False, pretrained=False):
     return v2.Compose(steps)
 
 
+def patient_group(image_path, label):
+    """Extract the patient identifier encoded in this dataset's filenames."""
+    stem = Path(image_path).stem
+    if label == 'PNEUMONIA':
+        match = re.match(r'person\d+', stem, re.IGNORECASE)
+    elif label == 'NORMAL':
+        match = re.match(r'(?:NORMAL2-)?IM-\d+', stem, re.IGNORECASE)
+    else:
+        raise ValueError(f'Unexpected class: {label}')
+    if match is None:
+        raise ValueError(f'Cannot identify patient from filename: {image_path}')
+    return f'{label}:{match.group().upper()}'
+
+
 def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
                  augment=False, pretrained=False, num_workers=0):
     """Split original train+val; keep the provided test set untouched."""
@@ -70,15 +85,23 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
     # 이 순서는 아래 ConcatDataset([train, val])의 인덱스 순서와 정확히 일치해야 한다.
     labels = plain.targets + original_val.targets
 
-    # 이미지가 아니라 인덱스를 나눈 뒤, 나중에 Subset으로 샘플을 골라낸다.
-    # stratify=labels   → 클래스 비율을 train/val에 동일하게 유지
-    # random_state=seed → 실행할 때마다 같은 분할 결과 보장
-    train_ids, val_ids = train_test_split(
-        list(range(len(labels))),
-        test_size=val_fraction,
-        stratify=labels,
-        random_state=seed,
-    )
+    # 한 환자의 여러 X-ray가 train과 val 양쪽에 들어가지 않도록 그룹 분할.
+    samples = plain.samples + original_val.samples
+    groups = [patient_group(path, plain.classes[label]) for path, label in samples]
+    n_splits = round(1 / val_fraction)
+    if n_splits < 2 or abs(1 / n_splits - val_fraction) > 1e-9:
+        raise ValueError('val_fraction must be the reciprocal of an integer >= 2')
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    overall_positive = sum(labels) / len(labels)
+    candidates = list(splitter.split(samples, labels, groups))
+    # Group sizes vary, so choose the fold closest to the requested fraction
+    # and class balance. Every candidate still has disjoint patient groups.
+    train_ids, val_ids = min(candidates, key=lambda pair: (
+        abs(len(pair[1]) / len(labels) - val_fraction) +
+        abs(sum(labels[i] for i in pair[1]) / len(pair[1]) - overall_positive)))
+    train_ids, val_ids = train_ids.tolist(), val_ids.tolist()
+    if {groups[i] for i in train_ids} & {groups[i] for i in val_ids}:
+        raise RuntimeError('Patient overlap between train and validation')
 
     # 학습용(증강 가능)과 평가용(증강 없음) 전처리를 따로 준비
     train_transform = make_transforms(augment, pretrained)
@@ -110,4 +133,8 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
         'classes': plain.classes,
         # 각 분할의 샘플 수 (로그 출력·확인용)
         'sizes': {'train': len(train_set), 'val': len(val_set), 'test': len(test_set)},
+        'split': {'strategy': 'stratified_patient_group', 'seed': seed,
+                  'train_patients': len({groups[i] for i in train_ids}),
+                  'val_patients': len({groups[i] for i in val_ids}),
+                  'patient_overlap': 0},
     }
