@@ -26,6 +26,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device,
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(1, epochs + 1):
         model.train()
+        if getattr(model, '_frozen_backbone', False):
+            # 분류기만 학습할 때 동결된 BatchNorm의 이동 통계도 고정한다.
+            for module in model.modules():
+                if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                    module.eval()
         loss_sum, count = 0.0, 0
         actual, predicted = [], []
         for images, labels in train_loader:

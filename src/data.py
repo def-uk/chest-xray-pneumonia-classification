@@ -5,10 +5,17 @@ from pathlib import Path
 import re
 
 from sklearn.model_selection import StratifiedGroupKFold
+from PIL import Image
 import torch
 from torch.utils.data import ConcatDataset, DataLoader, Subset
 from torchvision import datasets
 from torchvision.transforms import v2
+
+
+def load_original_image(path):
+    """ImageFolder의 암묵적인 RGB 변환 없이 원본 채널을 유지해 읽는다."""
+    with Image.open(path) as image:
+        return image.copy()
 
 
 def dataset_dirs(root):
@@ -29,7 +36,8 @@ def make_transforms(augment=False, pretrained=False):
     augment:    True면 학습용 데이터 증강(작은 회전)을 추가한다.
     pretrained: True면 ImageNet 사전학습 모델용 정규화 값을 사용한다.
     """
-    # X-rays are grayscale; pretrained ImageNet networks require three channels.
+    # 원본 채널 수를 유지해 읽은 뒤 회색조 3채널로 통일한다.
+    # 1채널은 동일한 값으로 3채널에 복제되고, RGB 입력도 회색조가 된다.
     # 사전학습 모델이면 ImageNet 통계값, 아니면 [-1, 1] 범위로 맞추는 0.5/0.5 사용.
     mean = (0.485, 0.456, 0.406) if pretrained else (0.5, 0.5, 0.5)
     std = (0.229, 0.224, 0.225) if pretrained else (0.5, 0.5, 0.5)
@@ -109,17 +117,22 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
 
     # 같은 이미지 풀(train+val)을 transform만 다르게 두 벌 만든다.
     # → train 샘플은 증강이 적용되고, val 샘플은 증강 없이 평가된다.
-    train_sources = ConcatDataset([datasets.ImageFolder(dirs['train'], transform=train_transform),
-                                   datasets.ImageFolder(dirs['val'], transform=train_transform)])
-    eval_sources = ConcatDataset([datasets.ImageFolder(dirs['train'], transform=eval_transform),
-                                  datasets.ImageFolder(dirs['val'], transform=eval_transform)])
+    train_sources = ConcatDataset([datasets.ImageFolder(dirs['train'], transform=train_transform,
+                                                       loader=load_original_image),
+                                   datasets.ImageFolder(dirs['val'], transform=train_transform,
+                                                       loader=load_original_image)])
+    eval_sources = ConcatDataset([datasets.ImageFolder(dirs['train'], transform=eval_transform,
+                                                      loader=load_original_image),
+                                  datasets.ImageFolder(dirs['val'], transform=eval_transform,
+                                                      loader=load_original_image)])
 
     # 앞에서 구한 인덱스로 각 풀에서 필요한 샘플만 골라낸다.
     train_set = Subset(train_sources, train_ids)
     val_set = Subset(eval_sources, val_ids)
 
     # test는 원본 그대로, 평가용 전처리만 적용
-    test_set = datasets.ImageFolder(dirs['test'], transform=eval_transform)
+    test_set = datasets.ImageFolder(dirs['test'], transform=eval_transform,
+                                    loader=load_original_image)
     if test_set.classes != plain.classes:
         raise ValueError('Test class names differ')
 

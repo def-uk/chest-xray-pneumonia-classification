@@ -24,7 +24,8 @@ class CustomCNN(nn.Module):
         return self.classifier(self.features(x))
 
 
-def create_model(name, num_classes=2, pretrained=False, mode='full'):
+def create_model(name, num_classes=2, pretrained=False, mode='full',
+                 architecture_source='custom'):
     """Build alexnet, vgg16, googlenet, resnet18, or custom_cnn.
 
     Scratch models come from src/models. Pretrained models use torchvision so
@@ -33,6 +34,8 @@ def create_model(name, num_classes=2, pretrained=False, mode='full'):
     key = name.lower().replace('-', '').replace('_', '')
     key = {'alex': 'alexnet', 'vgg': 'vgg16', 'googlenetv1': 'googlenet',
            'resnet': 'resnet18'}.get(key, key)
+    if architecture_source not in {'custom', 'torchvision'}:
+        raise ValueError('architecture_source must be custom or torchvision')
     if mode not in {'frozen', 'partial', 'full'}:
         raise ValueError('mode must be frozen, partial, or full')
     if key == 'customcnn':
@@ -41,9 +44,9 @@ def create_model(name, num_classes=2, pretrained=False, mode='full'):
         return CustomCNN(num_classes)
     if key not in {'alexnet', 'vgg16', 'googlenet', 'resnet18'}:
         raise ValueError(f'Unknown model: {name}')
-    if not pretrained:
-        if mode != 'full':
-            raise ValueError('Frozen/partial require pretrained=True')
+    if not pretrained and mode != 'full':
+        raise ValueError('Frozen/partial require pretrained=True')
+    if not pretrained and architecture_source == 'custom':
         factories = {
             'alexnet': lambda: AlexNet(num_classes),
             'vgg16': lambda: VGG(VGG16_CONFIG, batch_norm=False, num_classes=num_classes),
@@ -58,8 +61,8 @@ def create_model(name, num_classes=2, pretrained=False, mode='full'):
         'resnet18': (tv.resnet18, tv.ResNet18_Weights.DEFAULT),
     }
     builder, weights = builders[key]
-    kwargs = {'weights': weights}
-    if key == 'googlenet':
+    kwargs = {'weights': weights if pretrained else None}
+    if key == 'googlenet' and not pretrained:
         kwargs['aux_logits'] = False
     model = builder(**kwargs)
     if key in {'alexnet', 'vgg16'}:
@@ -73,6 +76,7 @@ def create_model(name, num_classes=2, pretrained=False, mode='full'):
     for parameter_name, parameter in model.named_parameters():
         parameter.requires_grad = (mode == 'full' or parameter_name.startswith(head) or
                                    (mode == 'partial' and parameter_name.startswith(last_stage)))
+    model._frozen_backbone = mode == 'frozen'
     return model
 
 

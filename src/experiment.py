@@ -39,7 +39,7 @@ def _history_from_csv(path):
 def load_or_train(name, *, num_classes, pretrained, mode, train_loader,
                   val_loader, criterion, device, epochs, lr, seed, output_dir,
                   force_train=False, legacy_checkpoint_path=None,
-                  legacy_csv_path=None):
+                  legacy_csv_path=None, architecture_source='custom'):
     """Return (best_model, history, reused).
 
     A completed run is reused only when its model, settings, dataset membership,
@@ -54,13 +54,16 @@ def load_or_train(name, *, num_classes, pretrained, mode, train_loader,
         'train_data': _dataset_description(train_loader.dataset),
         'val_data': _dataset_description(val_loader.dataset),
     }
+    if architecture_source != 'custom':
+        settings['architecture_source'] = architecture_source
     fingerprint = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
     run_dir = Path(output_dir) / f'{name}_{mode}_{fingerprint[:12]}'
     csv_path = run_dir / 'history.csv'
     checkpoint_path = run_dir / 'best_recall.pt'
     manifest_path = run_dir / 'manifest.json'
     model = create_model(name, num_classes=num_classes,
-                         pretrained=pretrained, mode=mode).to(device)
+                         pretrained=pretrained, mode=mode,
+                         architecture_source=architecture_source).to(device)
     if (not force_train and legacy_checkpoint_path is not None and
             legacy_csv_path is not None and not manifest_path.exists()):
         old_checkpoint = Path(legacy_checkpoint_path)
