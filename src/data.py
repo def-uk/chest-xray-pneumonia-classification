@@ -73,7 +73,8 @@ def patient_group(image_path, label):
 
 
 def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
-                 augment=False, pretrained=False, num_workers=0):
+                 augment=False, pretrained=False, num_workers=0,
+                 fold_index=None):
     """Split original train+val; keep the provided test set untouched."""
     # 원본 데이터셋의 val 폴더는 이미지가 너무 적어서(클래스당 몇 장)
     # train + val을 합친 뒤 클래스 비율을 유지하며 다시 나눈다.
@@ -102,11 +103,15 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
     splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     overall_positive = sum(labels) / len(labels)
     candidates = list(splitter.split(samples, labels, groups))
-    # Group sizes vary, so choose the fold closest to the requested fraction
-    # and class balance. Every candidate still has disjoint patient groups.
-    train_ids, val_ids = min(candidates, key=lambda pair: (
-        abs(len(pair[1]) / len(labels) - val_fraction) +
-        abs(sum(labels[i] for i in pair[1]) / len(pair[1]) - overall_positive)))
+    if fold_index is None:
+        # 기존 단일 검증 실험은 크기와 클래스 비율이 가장 가까운 폴드를 유지한다.
+        train_ids, val_ids = min(candidates, key=lambda pair: (
+            abs(len(pair[1]) / len(labels) - val_fraction) +
+            abs(sum(labels[i] for i in pair[1]) / len(pair[1]) - overall_positive)))
+    else:
+        if not isinstance(fold_index, int) or not 0 <= fold_index < n_splits:
+            raise ValueError(f'fold_index must be an integer from 0 to {n_splits - 1}')
+        train_ids, val_ids = candidates[fold_index]
     train_ids, val_ids = train_ids.tolist(), val_ids.tolist()
     if {groups[i] for i in train_ids} & {groups[i] for i in val_ids}:
         raise RuntimeError('Patient overlap between train and validation')
@@ -136,6 +141,13 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
     if test_set.classes != plain.classes:
         raise ValueError('Test class names differ')
 
+    split_info = {'strategy': 'stratified_patient_group', 'seed': seed,
+                  'train_patients': len({groups[i] for i in train_ids}),
+                  'val_patients': len({groups[i] for i in val_ids}),
+                  'patient_overlap': 0}
+    if fold_index is not None:
+        split_info['fold_index'] = fold_index
+
     return {
         # 학습 데이터만 매 epoch마다 순서를 섞는다.
         'train': DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers),
@@ -146,8 +158,5 @@ def make_loaders(root, batch_size=32, val_fraction=0.2, seed=42,
         'classes': plain.classes,
         # 각 분할의 샘플 수 (로그 출력·확인용)
         'sizes': {'train': len(train_set), 'val': len(val_set), 'test': len(test_set)},
-        'split': {'strategy': 'stratified_patient_group', 'seed': seed,
-                  'train_patients': len({groups[i] for i in train_ids}),
-                  'val_patients': len({groups[i] for i in val_ids}),
-                  'patient_overlap': 0},
+        'split': split_info,
     }

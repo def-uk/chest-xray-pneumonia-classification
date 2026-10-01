@@ -39,7 +39,8 @@ def _history_from_csv(path):
 def load_or_train(name, *, num_classes, pretrained, mode, train_loader,
                   val_loader, criterion, device, epochs, lr, seed, output_dir,
                   force_train=False, legacy_checkpoint_path=None,
-                  legacy_csv_path=None, architecture_source='custom'):
+                  legacy_csv_path=None, architecture_source='custom',
+                  checkpoint_only=False):
     """Return (best_model, history, reused).
 
     A completed run is reused only when its model, settings, dataset membership,
@@ -64,6 +65,19 @@ def load_or_train(name, *, num_classes, pretrained, mode, train_loader,
     model = create_model(name, num_classes=num_classes,
                          pretrained=pretrained, mode=mode,
                          architecture_source=architecture_source).to(device)
+    if checkpoint_only:
+        # Inference needs the completed, matching checkpoint, not epoch CSV rows.
+        # Never start an unexpected training run during sensitivity analysis.
+        if force_train or not checkpoint_path.exists() or not manifest_path.exists():
+            raise FileNotFoundError(f'Completed checkpoint required: {run_dir}')
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        if (manifest.get('fingerprint') != fingerprint or
+                checkpoint['epoch'] != manifest.get('best_epoch')):
+            raise ValueError(f'Checkpoint metadata mismatch: {run_dir}')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Reused {name} checkpoint for inference: epoch {checkpoint['epoch']}")
+        return model, [], True
     if (not force_train and legacy_checkpoint_path is not None and
             legacy_csv_path is not None and not manifest_path.exists()):
         old_checkpoint = Path(legacy_checkpoint_path)

@@ -1,0 +1,8 @@
+model,folds,mean_accuracy,mean_precision,mean_recall,std_recall,mean_f1,std_f1
+VGG16 / Full fine-tuning,5,0.9847,0.9828,0.9969,0.0020,0.9898,0.0025
+GoogLeNet / Full fine-tuning,5,0.9826,0.9807,0.9964,0.0042,0.9884,0.0057
+AlexNet / Full fine-tuning,5,0.9805,0.9785,0.9956,0.0049,0.9870,0.0025
+AlexNet / Random initialization,5,0.9740,0.9707,0.9951,0.0021,0.9827,0.0042
+VGG16 / Random initialization,5,0.9675,0.9634,0.9941,0.0040,0.9785,0.0032
+ResNet18 / Full fine-tuning,5,0.9654,0.9579,0.9979,0.0015,0.9773,0.0136
+Custom CNN,5,0.9612,0.9562,0.9933,0.0040,0.9744,0.0043
